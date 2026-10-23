@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 240" role="img" aria-label="천경련 천안고 경제인 연합회">
+  <title>천경련 — 천안고 경제인 연합회</title>
+  <image href="logo-emblem.svg" x="0" y="0" width="240" height="240"/>
+  <g font-family="Pretendard, 'Noto Sans KR', 'Malgun Gothic', sans-serif">
+    <text x="272" y="118" font-size="92" font-weight="800" fill="#2a388d" letter-spacing="2">천경련</text>
+    <rect x="276" y="140" width="64" height="6" fill="#00b3e2"/>
+    <text x="352" y="150" font-size="30" font-weight="700" fill="#363582">천안고 경제인 연합회</text>
+    <text x="274" y="196" font-size="21" font-weight="600" fill="#5b64a8" letter-spacing="2.4">CHEONAN HIGH BUSINESS ALLIANCE</text>
+  </g>
+</svg>

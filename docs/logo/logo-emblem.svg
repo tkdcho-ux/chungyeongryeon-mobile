@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="천경련 엠블럼">
+  <title>천경련 — 천안고 경제인 연합회</title>
+  <defs>
+    <linearGradient id="g-navy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#363582"/>
+      <stop offset="1" stop-color="#1e2a78"/>
+    </linearGradient>
+    <linearGradient id="g-rise" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#00b3e2" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#00b3e2"/>
+    </linearGradient>
+    <clipPath id="c2"><circle cx="120" cy="120" r="116"/><rect x="150" y="0" width="90" height="140"/></clipPath>
+  </defs>
+  <!-- 원: 동문 연합 -->
+  <circle cx="120" cy="120" r="116" fill="url(#g-navy)"/>
+  <circle cx="120" cy="120" r="104" fill="none" stroke="#ffffff" stroke-opacity=".28" stroke-width="2"/>
+  <!-- 天: 천안고(天高) · 근면·강직 두 획 -->
+  <g fill="#ffffff">
+    <rect x="80" y="58" width="80" height="15" rx="3"/>
+    <rect x="58" y="96" width="124" height="16" rx="3"/>
+    <rect x="112" y="58" width="16" height="52"/>
+    <path d="M112 108 L128 108 C126 138 106 166 70 186 L61 173 C92 156 109 134 112 108 Z"/>
+    <path d="M126 122 C136 148 154 166 182 178 L175 191 C144 179 124 158 114 132 Z"/>
+  </g>
+  <!-- 상승 곡선: 71년 전통 위의 동반성장 -->
+  <path d="M40 204 C96 200 160 172 206 104 L214 114 C170 186 104 214 40 212 Z" fill="url(#g-rise)" clip-path="url(#c2)"/>
+  <circle cx="210" cy="108" r="6" fill="#ffffff"/>
+</svg>
