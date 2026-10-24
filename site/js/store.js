@@ -11,19 +11,23 @@ export const apiUrl = () => (LS.get('cgr.apiUrl', '') || CONFIG.API_URL || '').t
 export const kakaoKey = () => (LS.get('cgr.kakaoKey', '') || CONFIG.KAKAO_JS_KEY || '').trim();
 export const appUrl = () => (CONFIG.APP_URL || location.href.split('#')[0]);
 export const isServer = () => !!apiUrl();
+// 모임 사진 서버: 사진만 서버로 모아 여러 회원이 함께 봅니다 (명부는 서버 없이도 됨)
+export const photoApiUrl = () => (LS.get('cgr.photoApi', '') || CONFIG.PHOTO_API_URL || '').trim() || apiUrl();
+export const isPhotoServer = () => !!photoApiUrl();
 
-export async function call(action, payload = {}) {
-  const res = await fetch(apiUrl(), {
+export async function call(action, payload = {}, url = apiUrl()) {
+  const res = await fetch(url, {
     method: 'POST',
     // text/plain 이어야 Apps Script 호출 시 CORS 사전요청이 생기지 않습니다
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, code: LS.get('cgr.code', ''), admin: LS.get('cgr.admin', ''), ...payload }),
+    body: JSON.stringify({ action, code: LS.get('cgr.code', '') || globalThis.__CGR_CODE__ || '', admin: LS.get('cgr.admin', ''), ...payload }),
   });
   if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
   const j = await res.json();
   if (!j.ok) { const e = new Error(j.error || '요청에 실패했습니다'); e.code = j.code; throw e; }
   return j;
 }
+export const callPhoto = (action, payload) => call(action, payload, photoApiUrl());
 
 async function getJson(url) {
   try { const r = await fetch(url, { cache: 'no-store' }); return r.ok ? await r.json() : null; } catch { return null; }
@@ -98,8 +102,8 @@ export const localPhotos = {
       // 예전 방식(localStorage)에 남은 작은 사진도 함께 보여 줍니다
       const old = LS.get('cgr.localPhotos', []).map((p, i) => ({ id: 'old' + i, ...p }));
       const l = await tx('readonly', s => s.getAll());
-      return [...l.sort((a, b) => (b.at || '').localeCompare(a.at || '')), ...old];
-    } catch { return LS.get('cgr.localPhotos', []).map((p, i) => ({ id: 'old' + i, ...p })); }
+      return [...l.sort((a, b) => (b.at || '').localeCompare(a.at || '')), ...old].map(p => ({ ...p, local: true }));
+    } catch { return LS.get('cgr.localPhotos', []).map((p, i) => ({ id: 'old' + i, ...p, local: true })); }
   },
   // IndexedDB를 못 쓰는 환경(카톡에서 받은 파일로 열기 등)에서는 줄인 사진(small())을 localStorage에 둡니다
   async add(rec, small) {

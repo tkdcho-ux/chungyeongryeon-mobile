@@ -14,7 +14,11 @@ const PENDING_COLS = ['regId', 'status', 'createdAt', 'registrant', 'updateOf', 
 const PHOTO_COLS = ['photoId', 'fileId', 'createdAt', 'event', 'caption', 'uploader', 'uploaderGisu', 'ownerKey'];
 const DEFAULT_GROUPS = ['반도체·첨단소재', '제조·산업재', '건설·설비·부동산', '환경·순환자원', '전문서비스', '금융·투자', '교육·연구', '식품·외식·유통', '모빌리티·관광', 'IT·스마트인프라', '공공·단체'];
 
+// 초대 링크(#k=…)와 같은 접근코드를 쓰려면 setup 실행 전에 data/access-code.txt 의 코드를 여기에 붙여넣으세요
+const INVITE_CODE = '';
+
 const props = () => PropertiesService.getScriptProperties();
+const normCode_ = c => String(c || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
 
 // ---------- 최초 설정 (편집기에서 1회 실행) ----------
 function setup() {
@@ -30,7 +34,8 @@ function setup() {
     p.setProperty('PHOTO_FOLDER_ID', root.createFolder('모임사진').getId());
     p.setProperty('MEMBER_PHOTO_FOLDER_ID', root.createFolder('회원사진').getId());
   }
-  if (!p.getProperty('ACCESS_CODE')) p.setProperty('ACCESS_CODE', 'cgr' + Math.floor(1000 + Math.random() * 9000));
+  if (INVITE_CODE) p.setProperty('ACCESS_CODE', INVITE_CODE);
+  else if (!p.getProperty('ACCESS_CODE')) p.setProperty('ACCESS_CODE', 'cgr' + Math.floor(1000 + Math.random() * 9000));
   if (!p.getProperty('ADMIN_CODE')) p.setProperty('ADMIN_CODE', 'admin' + Math.floor(100000 + Math.random() * 900000));
   if (!p.getProperty('GROUPS')) p.setProperty('GROUPS', JSON.stringify(DEFAULT_GROUPS));
   Logger.log('회원 접근코드: %s  /  관리자 코드: %s', p.getProperty('ACCESS_CODE'), p.getProperty('ADMIN_CODE'));
@@ -57,7 +62,8 @@ function doPost(e) {
   let req;
   try { req = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: '잘못된 요청입니다' }); }
   const p = props();
-  if (!req.code || String(req.code).trim() !== p.getProperty('ACCESS_CODE')) return json_({ ok: false, code: 'BAD_CODE', error: '접근코드가 맞지 않습니다' });
+  // 앱과 같은 방식으로 대소문자·하이픈을 무시하고 비교합니다 (초대 링크 #k= 코드)
+  if (!req.code || normCode_(req.code) !== normCode_(p.getProperty('ACCESS_CODE'))) return json_({ ok: false, code: 'BAD_CODE', error: '접근코드가 맞지 않습니다' });
   const admin = !!req.admin && String(req.admin).trim() === p.getProperty('ADMIN_CODE');
   const adminOnly = ['pending', 'approve', 'reject', 'updateMember', 'importData'];
   if (adminOnly.indexOf(req.action) >= 0 && !admin) return json_({ ok: false, code: 'NOT_ADMIN', error: '관리자 코드가 필요합니다' });

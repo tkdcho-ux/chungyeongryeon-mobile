@@ -1,6 +1,6 @@
 // 천경련 디지털 회원명부 — 화면과 동작
-import { LS, loadAll, call, isServer, apiUrl, kakaoKey, appUrl, localPending, localPhotos, deviceId, normCode } from './store.js';
-import { toJpeg, loadCanvas, autoCrop, warpCard, rotate90, canvasToJpeg, recognize, parseCard } from './ocr.js';
+import { LS, loadAll, call, callPhoto, isServer, isPhotoServer, apiUrl, kakaoKey, appUrl, localPhotos, deviceId, normCode } from './store.js';
+import { toJpeg } from './ocr.js';
 import { smsHref, telHref, sendKakao, copyText, downloadVcard, isMobileNo, isIOS, TEMPLATES } from './msg.js';
 
 // ---------- 공통 ----------
@@ -110,7 +110,7 @@ function route() {
   window.scrollTo(0, 0);
   S.pickMode = r === 'cards' ? S.pickMode : false;
   $('.pickbar')?.remove();
-  const fn = ({ home: vHome, cards: vCards, m: vMember, report: vReport, models: vModels, model: vModel, custom: vCustom, register: vRegister, photos: vPhotos, compose: vCompose, settings: vSettings, install: vInstall, admin: vAdmin, edit: vEdit })[r] || vHome;
+  const fn = ({ home: vHome, cards: vCards, m: vMember, report: vReport, models: vModels, model: vModel, custom: vCustom, photos: vPhotos, compose: vCompose, settings: vSettings, install: vInstall, admin: vAdmin, edit: vEdit })[r] || vHome;
   fn(arg ? decodeURIComponent(arg) : undefined);
 }
 
@@ -143,7 +143,6 @@ function vHome() {
   const maxBand = Math.max(...bands.map(x => x.n), 1);
   const gc = groups.map(g => ({ g, n: members.filter(m => m.group === g).length })).filter(x => x.n).sort((a, b) => b.n - a.n);
   const maxG = Math.max(...gc.map(x => x.n), 1);
-  const pend = isServer() ? '' : localPending.list().length;
   // 첫 화면에서 바로 회원을 찾고, 큰 버튼 4개로 주요 기능에 들어가게 합니다. 통계는 맨 아래 접어 둡니다.
   view.innerHTML = `
   <section class="hero slim">
@@ -158,15 +157,13 @@ function vHome() {
     <div id="hmenu">
       <div class="menu-grid">
         ${bigTile('#/cards', '회원 찾기', 'var(--navy)', I.users)}
-        ${bigTile('#/register', '회원 등록', 'var(--cyan-dark)', I.camera)}
         ${bigTile('#/cards', '단체 문자', 'var(--sms)', I.sms, 'pickstart')}
         ${bigTile('#/photos', '모임 사진', 'var(--call)', I.image)}
+        ${bigTile('#/models', '성장모델', 'var(--cyan-dark)', I.report)}
       </div>
-      <a class="wide-btn" href="#/models">${I.report}<span class="grow"><b>동문 성장모델 ${models.length}가지</b><small>함께 할 수 있는 사업 제안</small></span>›</a>
       ${!standalone() ? `<a class="wide-btn install" href="#/install"><img src="assets/icon-192.png" alt=""><span class="grow"><b>휴대폰 바탕화면에 아이콘 만들기</b><small>한 번만 해 두면 바로 열립니다</small></span>›</a>` : ''}
       <div class="section-title">공지</div>
       <div class="notice"><span class="ico">馬</span><div><b>청마장학재단</b><div class="small muted">제25회부터 연 1,100만 원 장학금 지원 재개 · CMS 월 1만 원 이상 후원 모집 중 (네이버 '청마장학회')</div></div></div>
-      ${pend ? `<div class="notice" style="margin-top:10px"><span class="ico">!</span><div><b>이 휴대폰에 저장된 신규 등록 ${pend}건</b><div class="small muted">총무에게 카톡으로 알려 주세요.</div></div></div>` : ''}
       <details class="fold">
         <summary>천경련 한눈에 보기 (기수별·업종별 회원 수)</summary>
         <div class="card" style="margin-top:10px"><div class="cols">
@@ -330,7 +327,7 @@ function vMember(id) {
     </div>
     ${p || models.length ? `<details class="fold"><summary>이 회원과 협력할 만한 동문 보기</summary>
       ${p ? p.partners.map(x => partnerRow(x)).join('') : ''}${models.length ? `<div class="section-title">함께 하는 성장모델</div>${models.map(gmItem).join('')}` : ''}</details>` : ''}
-    ${isAdmin() ? `<a class="btn block" href="#/edit/${m.id}" style="margin-top:14px">회원 정보 수정 (관리자)</a>` : `<a class="btn block" href="#/register" style="margin-top:16px">정보가 바뀌었나요? 새 명함 올리기</a>`}
+    ${isAdmin() ? `<a class="btn block" href="#/edit/${m.id}" style="margin-top:14px">회원 정보 수정 (관리자)</a>` : ''}
   </div>`;
 }
 const partnerRow = x => { const o = S.byId[x.id]; return o ? `<a class="partner card" href="#/m/${o.id}" style="padding:12px 14px"><b>${nmHtml(o)}</b><span class="grow small muted">${esc(x.why)}</span>›</a>` : ''; };
@@ -472,8 +469,8 @@ function vCustom() {
   draw();
 }
 
-// ---------- 신규회원 등록 ----------
-// 파일(content://, file://)로 열면 카메라·글자인식·아이콘 만들기가 막힙니다 → 웹 주소로 열도록 안내
+// ---------- 웹 주소·초대 링크 ----------
+// 파일(content://, file://)로 열면 카메라·아이콘 만들기가 막힙니다 → 웹 주소로 열도록 안내
 const fileMode = !/^https?:$/.test(location.protocol);
 const webUrl = () => globalThis.__CGR_INVITE__ || inviteUrl();
 // 받은 사람이 코드 입력 없이 바로 들어오도록 접근코드를 붙인 초대 링크
@@ -482,241 +479,6 @@ function inviteUrl() {
   return code ? `${base}#k=${code}` : base;
 }
 const inKakao = () => /KAKAOTALK/i.test(navigator.userAgent);
-const fileModeNote = what => fileMode ? `<div class="card warn-card"><b>지금은 '파일'로 열려 있어 ${what}이(가) 되지 않습니다</b>
-  <p class="small" style="margin:4px 0 10px">카톡으로 받은 파일 대신 <b>웹 주소</b>로 열어야 모든 기능이 됩니다.</p>
-  <a class="btn primary block" href="${esc(webUrl())}" target="_blank" rel="noopener">웹 주소로 열기</a></div>` : '';
-const EMPTY_REG = () => ({ card: null, cardCanvas: null, src: null, quad: null, photo: null, ocrText: '', engine: '', auto: {}, f: { name: '', gisu: '', title: '', company: '', industry: '', group: '', mobile: '', tel: '', fax: '', email: '', address: '', website: '', memo: '', recommended: false, recommenderName: '', recommenderGisu: '', registrant: LS.get('cgr.me', {}).name || '' } });
-const canLiveCam = () => !fileMode && window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
-function vRegister() {
-  setTop({ title: '회원 등록', back: false }); setTab('register');
-  S.reg ||= EMPTY_REG();
-  const R = S.reg, f = R.f;
-  const groups = S.data.groups;
-  const autoTag = k => R.auto[k] ? ' <span class="auto-tag">명함에서 읽음</span>' : '';
-  const fld = (k, label, attrs = '', req = false) => `<div class="field"><label for="f-${k}">${label}${req ? ' <span class="req">*</span>' : ''}${autoTag(k)}</label><input id="f-${k}" name="${k}" class="${R.auto[k] ? 'auto' : ''}" value="${esc(f[k])}" ${attrs}></div>`;
-  view.innerHTML = `<div class="pad">
-    ${fileModeNote('명함 자동 인식')}
-    <div class="section-title" style="margin-top:4px">① 명함 사진 찍기</div>
-    ${R.card ? `<figure class="card-shot"><img src="${R.card.dataUrl}" alt="명함"></figure>
-    <div class="shot-tools"><button class="btn" type="button" id="reCrop">모서리 맞추기</button><button class="btn" type="button" id="reRotate">↻ 돌리기</button><button class="btn" type="button" id="reRead">다시 읽기</button></div>
-    <div class="scan-box" style="margin-top:10px">
-      ${canLiveCam() ? `<button class="scan-btn" type="button" id="btn-cam">${I.camera}다시 찍기</button>` : `<label class="scan-btn">${I.camera}다시 찍기<input type="file" accept="image/*" capture="environment" id="in-card-cam"></label>`}
-      <label class="scan-btn">${I.image}다른 사진 고르기<input type="file" accept="image/*" id="in-card"></label>
-    </div>` : `<div class="scan-box">
-      ${canLiveCam() ? `<button class="scan-btn primary" type="button" id="btn-cam">${I.camera}명함 촬영<small>틀에 맞춰 찍으면 끝</small></button>`
-        : `<label class="scan-btn primary">${I.camera}명함 촬영<small>카메라가 열립니다</small><input type="file" accept="image/*" capture="environment" id="in-card-cam"></label>`}
-      <label class="scan-btn">${I.image}사진첩에서 고르기<small>찍어 둔 명함 사진</small><input type="file" accept="image/*" id="in-card"></label>
-    </div>
-    <p class="small" style="margin:10px 2px 0;color:var(--navy);font-weight:700">명함을 어두운 바탕(책상 등)에 놓고 찍으면 테두리를 찾아 반듯하게 펴고, 이름·전화·회사를 아래에 자동으로 채웁니다.</p>`}
-    <div id="ocrState"></div>
-    ${R.ocrText ? `<details style="margin-top:10px"><summary class="small muted">인식된 글자 보기 (${esc(R.engine)})</summary><div class="ocr-raw">${esc(R.ocrText)}</div></details>` : ''}
-    <label class="scan-btn" style="margin-top:12px;grid-auto-flow:column;justify-content:center;padding:12px">${I.save}<span>얼굴 사진 넣기 <small>(안 해도 됩니다)</small></span><input type="file" accept="image/*" id="in-photo"></label>
-    ${R.photo ? `<div class="preview-row"><figure><img src="${R.photo.dataUrl}" alt="사진"><figcaption>프로필 사진</figcaption></figure></div>` : ''}
-
-    <form id="regForm" autocomplete="off">
-      <div class="section-title">② 회원 정보</div>
-      <p class="small muted" style="margin:-4px 0 12px">${R.card ? '명함에서 자동으로 채운 내용이 맞는지 확인하세요.' : '명함 사진이 없으면 직접 입력해도 됩니다. <b>*</b> 표시만 꼭 채우세요.'}</p>
-      <div class="field-2 name-gisu">${fld('name', '성명', 'required autocomplete="off"', true)}
-        <div class="field"><label for="f-gisu">졸업기수 <span class="req">*</span></label><div class="suffix" data-suffix="회"><input id="f-gisu" name="gisu" type="number" inputmode="numeric" min="1" max="99" required value="${esc(f.gisu)}" placeholder="예: 46"></div></div></div>
-      ${fld('mobile', '휴대폰', 'type="tel" inputmode="tel" required placeholder="010-0000-0000"', true)}
-      ${fld('company', '회사명', '', true)}
-      ${fld('title', '직위', 'placeholder="예: 대표이사"')}
-      <details class="fold" id="moreFields" ${['tel', 'fax', 'email', 'address', 'website', 'industry', 'memo'].some(k => f[k]) ? 'open' : ''}>
-        <summary>추가 정보 넣기 (선택)</summary>
-        <div style="margin-top:12px">
-          ${fld('tel', '회사 전화', 'type="tel" inputmode="tel"')}
-          ${fld('email', '이메일', 'type="email" inputmode="email"')}
-          ${fld('address', '회사 주소')}
-          ${fld('industry', '하는 일(업종)', 'placeholder="예: 자동차부품 제조"')}
-          <div class="field"><label for="f-group">업종 분류</label><select id="f-group" name="group"><option value="">선택 안 함</option>${groups.map(g => `<option ${f.group === g ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></div>
-          ${fld('fax', '팩스', 'type="tel" inputmode="tel"')}
-          ${fld('website', '홈페이지')}
-          <div class="field"><label for="f-memo">회사 소개·한마디</label><textarea id="f-memo" name="memo" placeholder="주요 제품, 거래처, 동문께 드리는 말씀">${esc(f.memo)}</textarea></div>
-        </div>
-      </details>
-
-      <div class="section-title">③ 추천인 (있을 때만)</div>
-      <label class="toggle"><input type="checkbox" name="recommended" id="f-rec" ${f.recommended ? 'checked' : ''}> 다른 동문의 추천으로 가입합니다</label>
-      <div id="recBox" style="${f.recommended ? '' : 'display:none'};margin-top:10px">
-        <div class="field-2">
-          <div class="field"><label for="f-recName">추천인 성명 <span class="req">*</span></label><input id="f-recName" name="recommenderName" list="memberNames" value="${esc(f.recommenderName)}" placeholder="예: 홍길동"></div>
-          <div class="field"><label for="f-recGisu">추천인 기수 <span class="req">*</span></label><div class="suffix" data-suffix="회"><input id="f-recGisu" name="recommenderGisu" type="number" inputmode="numeric" min="1" max="99" value="${esc(f.recommenderGisu)}" placeholder="예: 46"></div></div>
-        </div>
-        <datalist id="memberNames">${S.data.members.map(m => `<option value="${esc(m.name)}">${esc(nm(m))}</option>`).join('')}</datalist>
-      </div>
-
-      <details class="fold" ${f.registrant && f.registrant !== f.name ? 'open' : ''}><summary>다른 분 명함을 대신 올리는 경우</summary><div style="margin-top:12px">
-      ${fld('registrant', '대신 올리는 분(나)의 성함')}</div></details>
-      <label class="consent big" style="margin:16px 0 14px"><input type="checkbox" id="f-agree" required> <span><b>명함 주인이 명부 공개에 동의했습니다</b><small>성명·기수·연락처·회사 정보를 천경련 회원에게만 공개합니다.</small></span></label>
-      <button class="btn primary block" type="submit" style="min-height:60px;font-size:20px">등록 신청하기</button>
-      <p class="center" style="margin-top:14px"><button class="linkish" type="button" id="regReset">입력한 내용 모두 지우기</button></p>
-    </form>
-  </div>`;
-
-  const form = $('#regForm');
-  const sync = () => { for (const el of form.elements) if (el.name) f[el.name] = el.type === 'checkbox' ? el.checked : el.value; };
-  form.addEventListener('input', e => { sync(); if (R.auto[e.target.name]) { delete R.auto[e.target.name]; e.target.classList.remove('auto'); } });
-  $('#f-rec').onchange = e => { $('#recBox').style.display = e.target.checked ? '' : 'none'; };
-  $('#f-recName').addEventListener('change', e => { const hit = S.data.members.filter(m => m.name === e.target.value.trim()); if (hit.length === 1 && !$('#f-recGisu').value) { $('#f-recGisu').value = hit[0].gisu; sync(); } });
-  $('#regReset').onclick = () => { if (confirm('입력한 내용을 모두 지울까요?')) { S.reg = EMPTY_REG(); vRegister(); } };
-  // 명함 확정 → 화면 갱신 → 글자 읽기
-  const useCard = async (src, quad, card) => {
-    Object.assign(R, { src, quad, cardCanvas: card, card: canvasToJpeg(card, 1600, 0.88) });
-    vRegister(); await runOcr();
-  };
-  const fromFile = async e => {
-    const file = e.target.files[0]; if (!file) return;
-    sync();
-    const src = await loadCanvas(file, 2400);
-    openCropper(src, autoCrop(src).quad, (q, card) => useCard(src, q, card));
-  };
-  $('#in-card-cam') && ($('#in-card-cam').onchange = fromFile);
-  $('#in-card').onchange = fromFile;
-  $('#btn-cam') && ($('#btn-cam').onclick = () => { sync(); openCamera(useCard, fromFile); });
-  $('#reCrop') && ($('#reCrop').onclick = () => openCropper(R.src, R.quad, (q, card) => useCard(R.src, q, card)));
-  $('#reRotate') && ($('#reRotate').onclick = () => { const c = rotate90(R.cardCanvas); useCard(c, null, c); });
-  $('#reRead') && ($('#reRead').onclick = () => runOcr());
-  $('#in-photo').onchange = async e => { const file = e.target.files[0]; if (!file) return; sync(); R.photo = await toJpeg(file, 640, 0.85); vRegister(); };
-
-  form.onsubmit = async e => {
-    e.preventDefault(); sync();
-    if (!f.name.trim() || !f.gisu || !f.company.trim() || !f.mobile.trim()) return toast('성명·졸업기수·회사명·휴대폰은 꼭 입력해 주세요');
-    if (f.recommended && (!f.recommenderName.trim() || !f.recommenderGisu)) return toast('추천인 성명과 기수를 입력해 주세요');
-    if (!$('#f-agree').checked) return toast('개인정보 수집·이용에 동의해 주세요');
-    const dup = S.data.members.find(m => m.name === f.name.trim() && +m.gisu === +f.gisu);
-    if (dup && !confirm(`${nm(dup)} 회원이 이미 있습니다. 정보 변경으로 신청할까요?`)) return;
-    const member = { ...f, name: f.name.trim(), gisu: +f.gisu, recommenderGisu: f.recommended ? +f.recommenderGisu : '', updateOf: dup?.id || '' };
-    delete member.recommended;
-    const btn = form.querySelector('[type=submit]'); btn.disabled = true; btn.textContent = '보내는 중…';
-    try {
-      if (isServer()) await call('register', { member, cardImage: R.card?.base64 || '', photo: R.photo?.base64 || '' });
-      else localPending.add({ ...member, at: new Date().toISOString(), card: R.card ? (await shrink(R.card.dataUrl)) : '' });
-      const done = { ...member };
-      S.reg = EMPTY_REG();
-      regDone(done);
-    } catch (err) { toast('등록 실패: ' + err.message); btn.disabled = false; btn.textContent = '등록 신청하기'; }
-  };
-}
-async function runOcr() {
-  const R = S.reg, box = $('#ocrState');
-  box.innerHTML = `<div class="card" style="margin-top:12px"><b id="ocrMsg">명함 글자를 읽는 중…</b><div class="progress"><i id="ocrBar"></i></div></div>`;
-  try {
-    const r = await recognize(R.cardCanvas, (p, msg) => { const b = $('#ocrBar'); if (b) b.style.width = Math.round(p * 100) + '%'; const t = $('#ocrMsg'); if (t) t.textContent = msg; });
-    // 다시 읽을 때는 앞서 자동으로 채운 값(사람이 고치지 않은 것)을 비우고 새로 채웁니다
-    for (const [k, v] of Object.entries(R.auto)) if (R.f[k] === v) R.f[k] = '';
-    R.auto = {}; R.ocrText = r.text; R.engine = r.engine;
-    const parsed = r.fields || parseCard(r.text, r.lines);
-    for (const [k, v] of Object.entries(parsed)) if (k in R.f && typeof v === 'string' && v.trim() && !R.f[k]) { R.f[k] = v.trim(); R.auto[k] = R.f[k]; }
-    const n = Object.keys(R.auto).length;
-    vRegister();
-    toast(n ? `명함에서 ${n}개 항목을 읽었습니다. 하늘색 칸을 확인하세요` : '글자를 읽지 못했습니다. [모서리 맞추기]나 [돌리기] 후 다시 읽거나 직접 입력해 주세요');
-  } catch (e) {
-    box.innerHTML = `<div class="check-note">자동 인식에 실패했습니다(${esc(e.message)}). 아래에 직접 입력해 주세요.</div>`;
-  }
-}
-
-// 리멤버식 촬영 화면: 실시간 카메라 + 명함 틀. 틀 안을 잘라 테두리를 한 번 더 찾아 반듯하게 폅니다
-function openCamera(onCard, onFile) {
-  const ov = document.createElement('div'); ov.className = 'cam';
-  ov.innerHTML = `<video playsinline muted autoplay></video>
-    <div class="cam-frame"><i></i><i></i><i></i><i></i></div>
-    <p class="cam-hint">명함을 틀 안에 꽉 차게 맞춰 주세요</p>
-    <div class="cam-bar"><button type="button" class="cam-x" aria-label="닫기">✕</button>
-      <button type="button" class="cam-shot" aria-label="촬영"></button>
-      <label class="cam-pick">${I.image}<span>사진첩</span><input type="file" accept="image/*"></label></div>`;
-  document.body.appendChild(ov);
-  const video = $('video', ov); let stream;
-  const close = () => { stream?.getTracks().forEach(t => t.stop()); ov.remove(); };
-  $('.cam-x', ov).onclick = close;
-  $('input', ov).onchange = e => { close(); onFile(e); };
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
-    .then(s => { stream = s; video.srcObject = s; })
-    .catch(() => { $('.cam-hint', ov).textContent = '카메라를 열 수 없습니다. 아래 [사진첩]을 쓰거나 브라우저에서 카메라 권한을 허용해 주세요'; });
-  $('.cam-shot', ov).onclick = () => {
-    if (!video.videoWidth) return;
-    // 화면의 틀 위치 → 실제 영상 좌표 (영상은 화면을 꽉 채우도록 잘려 보입니다)
-    const vr = video.getBoundingClientRect(), fr = $('.cam-frame', ov).getBoundingClientRect();
-    const k = Math.max(vr.width / video.videoWidth, vr.height / video.videoHeight);
-    const ox = (vr.width - video.videoWidth * k) / 2, oy = (vr.height - video.videoHeight * k) / 2, pad = 0.08;
-    let x = (fr.left - vr.left - ox) / k, y = (fr.top - vr.top - oy) / k, w = fr.width / k, h = fr.height / k;
-    x -= w * pad; y -= h * pad; w *= 1 + 2 * pad; h *= 1 + 2 * pad;
-    x = Math.max(0, x); y = Math.max(0, y); w = Math.min(video.videoWidth - x, w); h = Math.min(video.videoHeight - y, h);
-    const shot = document.createElement('canvas'); shot.width = Math.round(w); shot.height = Math.round(h);
-    shot.getContext('2d').drawImage(video, x, y, w, h, 0, 0, shot.width, shot.height);
-    close();
-    const { quad, card } = autoCrop(shot);
-    if (quad) return onCard(shot, quad, card);
-    // 테두리를 못 찾으면 틀 안쪽(여백 제외)을 그대로 씁니다
-    const mx = shot.width * pad / (1 + 2 * pad), my = shot.height * pad / (1 + 2 * pad);
-    const q = [{ x: mx, y: my }, { x: shot.width - mx, y: my }, { x: shot.width - mx, y: shot.height - my }, { x: mx, y: shot.height - my }];
-    onCard(shot, q, warpCard(shot, q));
-  };
-}
-
-// 모서리 맞추기 화면: 자동으로 찾은 네 모서리를 손가락으로 끌어 고칩니다
-function openCropper(src, quad, onDone) {
-  let canvas = src;
-  const inset = c => [{ x: c.width * .06, y: c.height * .06 }, { x: c.width * .94, y: c.height * .06 }, { x: c.width * .94, y: c.height * .94 }, { x: c.width * .06, y: c.height * .94 }];
-  let q = (quad || inset(canvas)).map(p => ({ ...p }));
-  const ov = document.createElement('div'); ov.className = 'cropper';
-  ov.innerHTML = `<p class="crop-hint">${quad ? '명함 테두리를 찾았습니다. 맞지 않으면 동그라미를 끌어 모서리에 맞춰 주세요' : '동그라미 4개를 끌어 명함 네 모서리에 맞춰 주세요'}</p>
-    <div class="crop-stage"><img alt=""><svg><polygon/></svg><b></b><b></b><b></b><b></b></div>
-    <div class="crop-bar"><button type="button" class="btn" data-a="cancel">취소</button><button type="button" class="btn" data-a="rot">↻ 돌리기</button><button type="button" class="btn primary" data-a="ok">이대로 읽기</button></div>`;
-  document.body.appendChild(ov);
-  const stage = $('.crop-stage', ov), img = $('img', ov), poly = $('polygon', ov), dots = $$('b', ov);
-  let scale = 1;
-  const draw = () => {
-    poly.setAttribute('points', q.map(p => `${p.x * scale},${p.y * scale}`).join(' '));
-    dots.forEach((d, i) => { d.style.left = q[i].x * scale + 'px'; d.style.top = q[i].y * scale + 'px'; });
-  };
-  const layout = () => {
-    const box = ov.getBoundingClientRect();
-    scale = Math.min((box.width - 32) / canvas.width, (box.height - 190) / canvas.height);
-    stage.style.width = canvas.width * scale + 'px'; stage.style.height = canvas.height * scale + 'px';
-    draw();
-  };
-  const load = () => { img.src = canvas.toDataURL('image/jpeg', 0.85); layout(); };
-  dots.forEach((d, i) => {
-    d.onpointerdown = e => {
-      e.preventDefault(); d.setPointerCapture(e.pointerId);
-      d.onpointermove = ev => {
-        const r = stage.getBoundingClientRect();
-        q[i] = { x: Math.max(0, Math.min(canvas.width, (ev.clientX - r.left) / scale)), y: Math.max(0, Math.min(canvas.height, (ev.clientY - r.top) / scale)) };
-        draw();
-      };
-      d.onpointerup = () => { d.onpointermove = null; };
-    };
-  });
-  ov.onclick = e => {
-    const a = e.target.closest('[data-a]')?.dataset.a; if (!a) return;
-    if (a === 'cancel') return ov.remove();
-    if (a === 'rot') {
-      // 사진을 시계 방향으로 돌리고 모서리도 함께 돌립니다 (x,y) → (H−y, x)
-      const H = canvas.height; canvas = rotate90(canvas);
-      q = [q[3], q[0], q[1], q[2]].map(p => ({ x: H - p.y, y: p.x }));
-      return load();
-    }
-    removeEventListener('resize', layout); ov.remove(); onDone(q, warpCard(canvas, q));
-  };
-  addEventListener('resize', layout);
-  load();
-}
-async function shrink(dataUrl) { const b = await (await fetch(dataUrl)).blob(); return (await toJpeg(b, 480, 0.7)).dataUrl; }
-function regDone(m) {
-  setTop({ title: '등록 신청 완료', back: false });
-  const msg = `[천경련 신규회원 등록 신청]\n${m.name}(${m.gisu}회) ${m.company} ${m.title}\n휴대폰 ${m.mobile}${m.recommenderName ? `\n추천인 ${m.recommenderName}(${m.recommenderGisu}회)` : ''}`;
-  view.innerHTML = `<div class="pad center">
-    <img src="assets/logo-emblem.svg" alt="" width="96" height="96" style="margin:20px auto 10px;display:block">
-    <h2 style="color:var(--navy);margin:0">${esc(m.name)}<span class="gisu">${m.gisu}회</span> 등록 신청 완료</h2>
-    <p class="muted">${isServer() ? '총무(관리자)가 확인하면 명함첩에 올라갑니다.' : '아래 노란 버튼을 눌러 총무에게 카톡으로 보내 주세요. 총무가 확인 후 명부에 올립니다.'}</p>
-    <div class="stack" style="text-align:left">
-      <button class="btn kakao block" id="dk">${I.kakao}총무에게 카톡으로 알리기</button>
-      <a class="btn primary block" href="#/register">${I.camera}다른 명함 이어서 등록</a>
-      <a class="btn block" href="#/home">홈으로</a>
-    </div></div>`;
-  $('#dk').onclick = () => shareKakao(msg);
-}
-
 // ---------- 사진첩 ----------
 const defaultEvent = () => { const d = new Date(); return `${d.getFullYear()}년 ${d.getMonth() + 1}월 모임`; };
 function vPhotos() {
@@ -724,8 +486,8 @@ function vPhotos() {
   const me = LS.get('cgr.me', {});
   view.innerHTML = `<div class="pad">
     ${modeBanner()}
-    ${isServer() ? '' : `<div class="card warn-card"><b>지금 올리는 사진은 이 휴대폰에만 저장됩니다</b>
-      <p class="small" style="margin:4px 0 0">다른 회원도 보게 하려면 총무가 무료 구글 서버를 연결해야 합니다 (설정 → 서버 주소).</p></div>`}
+    ${isPhotoServer() ? '<p class="small" style="margin:0 2px 10px;color:var(--ok);font-weight:800">올린 사진은 모든 회원이 함께 봅니다. 내가 올린 사진은 눌러서 지울 수 있습니다.</p>' : `<div class="card warn-card"><b>지금 올리는 사진은 이 휴대폰에만 저장됩니다</b>
+      <p class="small" style="margin:4px 0 0">다른 회원도 보게 하려면 총무가 사진 서버를 연결해야 합니다 (설정 → 사진 서버 주소).</p></div>`}
     <div class="scan-box one">
       <label class="scan-btn primary big">${I.image}앨범에서 사진 고르기<small>여러 장을 한 번에 고를 수 있습니다</small><input type="file" accept="image/*" multiple id="p-files"></label>
       <label class="scan-btn">${I.camera}지금 찍어서 올리기<input type="file" accept="image/*" capture="environment" id="p-cam"></label>
@@ -756,7 +518,7 @@ function vPhotos() {
       try {
         // 휴대폰 화면에서 선명하도록 긴 변 2048px·고화질로 올립니다 (원본 10MB 사진도 약 0.6MB)
         const img = await toJpeg(file, 2048, 0.9);
-        if (isServer()) await call('uploadPhoto', { image: img.base64, event: ev, caption: cap, uploader: who, uploaderGisu: gisu, device: deviceId() });
+        if (isPhotoServer()) await callPhoto('uploadPhoto', { image: img.base64, event: ev, caption: cap, uploader: who, uploaderGisu: gisu, device: deviceId() });
         else {
           const rec = { url: img.dataUrl, event: ev, caption: cap, uploader: who, uploaderGisu: gisu, at: new Date().toISOString(), local: true };
           await localPhotos.add(rec, async () => ({ ...rec, url: (await toJpeg(file, 1280, 0.8)).dataUrl }));
@@ -773,8 +535,9 @@ function vPhotos() {
 async function drawGallery() {
   const gal = $('#gal'); if (!gal) return;
   let list = [];
-  if (isServer()) {
-    try { S.photos ||= (await call('photos', { device: deviceId() })).photos; list = S.photos; } catch (e) { gal.innerHTML = `<div class="empty" style="grid-column:1/-1">사진을 불러오지 못했습니다: ${esc(e.message)}</div>`; return; }
+  if (isPhotoServer()) {
+    // 서버 연결 전에 이 휴대폰에만 저장한 사진도 함께 보여 주고, 눌러서 모두에게 공유할 수 있게 합니다
+    try { S.photos ||= (await callPhoto('photos', { device: deviceId() })).photos; list = [...(await localPhotos.list()), ...S.photos]; } catch (e) { gal.innerHTML = `<div class="empty" style="grid-column:1/-1">사진을 불러오지 못했습니다: ${esc(e.message)}</div>`; return; }
   } else list = await localPhotos.list();
   S.photoList = list;
   $('#pcount') && ($('#pcount').textContent = `${list.length}장`);
@@ -790,14 +553,26 @@ function lightbox(p) {
   const d = document.createElement('div');
   d.className = 'lightbox';
   d.innerHTML = `<div><img src="${esc(p.full || p.url)}" alt=""><div class="cap">${esc(cap)}</div>
-    <div class="btn-row" style="margin-top:12px;justify-content:center">${canDel ? '<button class="btn danger" data-del>사진 삭제</button>' : ''}<a class="btn" href="${esc(p.full || p.url)}" download="천경련_사진.jpg" target="_blank" rel="noopener">저장</a><button class="btn" data-close>닫기</button></div></div>`;
+    ${p.local && isPhotoServer() ? '<button class="btn cyan block" data-share style="margin-top:12px">모든 회원에게 공유하기</button>' : ''}
+    <div class="btn-row" style="margin-top:12px;justify-content:center">${canDel ? '<button class="btn danger" data-del>사진 삭제</button>' : ''}<a class="btn primary" href="${esc(p.full || p.url)}" download="천경련_사진.jpg" target="_blank" rel="noopener">사진 저장</a><button class="btn" data-close>닫기</button></div></div>`;
   d.onclick = async e => {
     if (e.target.closest('a')) return;
+    if (e.target.closest('[data-share]')) {
+      // 이 휴대폰 사진을 서버로 올리고, 올라가면 휴대폰 사본은 지웁니다 (내 사진으로 남아 계속 지울 수 있음)
+      const b = e.target.closest('[data-share]'); b.disabled = true; b.textContent = '올리는 중…';
+      try {
+        const img = await toJpeg(await (await fetch(p.url)).blob(), 2048, 0.9);
+        await callPhoto('uploadPhoto', { image: img.base64, event: p.event, caption: p.caption || '', uploader: p.uploader, uploaderGisu: p.uploaderGisu, device: deviceId() });
+        await localPhotos.remove(p.id);
+        d.remove(); S.photos = null; toast('모든 회원이 볼 수 있게 올렸습니다'); drawGallery();
+      } catch (err) { toast('공유 실패: ' + err.message); b.disabled = false; b.textContent = '모든 회원에게 공유하기'; }
+      return;
+    }
     if (!e.target.closest('[data-del]')) return d.remove();
     if (!confirm('이 사진을 지울까요? 지우면 되돌릴 수 없습니다.')) return;
     try {
       if (p.local) await localPhotos.remove(p.id);
-      else await call('deletePhoto', { photoId: p.id, device: deviceId() });
+      else await callPhoto('deletePhoto', { photoId: p.id, device: deviceId() });
       d.remove(); S.photos = null; toast('사진을 지웠습니다'); drawGallery();
     } catch (err) { toast('삭제 실패: ' + err.message); }
   };
@@ -887,11 +662,12 @@ function vSettings() {
     <a class="btn block" href="#/install">바탕화면에 아이콘 만들기</a>
     <div class="section-title">연결 설정 <span class="tiny faint">(총무 안내에 따라 입력)</span></div>
     <div class="field"><label>서버 주소 (Google Apps Script)</label><input id="s-api" value="${esc(LS.get('cgr.apiUrl', ''))}" placeholder="${esc(apiUrl() || 'https://script.google.com/macros/s/…/exec')}"></div>
+    <div class="field"><label>사진 서버 주소 (모임 사진 함께 보기)</label><input id="s-photo" value="${esc(LS.get('cgr.photoApi', ''))}" placeholder="${esc(isPhotoServer() ? '배포 설정에 입력됨' : 'https://script.google.com/macros/s/…/exec')}"></div>
     <div class="field"><label>회원 접근코드</label><input id="s-code" value="${esc(LS.get('cgr.code', ''))}"></div>
     <div class="field"><label>카카오 JavaScript 키 (선택)</label><input id="s-kakao" value="${esc(LS.get('cgr.kakaoKey', ''))}" placeholder="${kakaoKey() ? '배포 설정에 입력됨' : '비워 두면 휴대폰 공유창 사용'}"></div>
     <div class="field"><label>관리자 코드 (총무 전용)</label><input id="s-admin" type="password" value="${esc(LS.get('cgr.admin', ''))}"></div>
     <button class="btn primary block" id="s-save">저장</button>
-    ${isAdmin() ? '<a class="btn block" href="#/admin" style="margin-top:10px">관리자 메뉴 (승인·데이터 올리기)</a>' : ''}
+    ${isAdmin() ? '<a class="btn block" href="#/admin" style="margin-top:10px">관리자 메뉴 (데이터 올리기)</a>' : ''}
     <div class="section-title">정보</div>
     <div class="card small"><div>명부 기준일: <b>${esc(S.data.updated || '-')}</b> · 회원 ${S.data.members.length}명</div><div>연결 상태: <b>${{ server: '서버 연결됨', bundle: '초대 명부(암호화 파일)', local: '미리보기(서버 미연결)', offline: '오프라인 사본' }[S.data.mode]}</b></div>
       <div class="faint" style="margin-top:6px">천안고 경제인 연합회(천경련) · 회원 전용 서비스입니다. 명부 내용을 외부에 공유하지 마세요.</div></div>
@@ -901,12 +677,13 @@ function vSettings() {
   $('#s-save').onclick = () => {
     LS.set('cgr.me', { name: $('#s-name').value.trim(), gisu: $('#s-gisu').value });
     const before = [LS.get('cgr.apiUrl', ''), LS.get('cgr.code', '')].join();
+    LS.set('cgr.photoApi', $('#s-photo').value.trim()); S.photos = null;
     LS.set('cgr.apiUrl', $('#s-api').value.trim()); LS.set('cgr.code', $('#s-code').value.trim());
     LS.set('cgr.kakaoKey', $('#s-kakao').value.trim()); LS.set('cgr.admin', $('#s-admin').value.trim());
     toast('저장했습니다');
     if (before !== [LS.get('cgr.apiUrl', ''), LS.get('cgr.code', '')].join()) setTimeout(() => location.reload(), 600); else vSettings();
   };
-  $('#s-reset').onclick = () => { if (confirm('이 기기에 저장된 설정·임시 등록·사진을 모두 지울까요?')) { localStorage.clear(); location.reload(); } };
+  $('#s-reset').onclick = () => { if (confirm('이 기기에 저장된 설정·사진을 모두 지울까요?')) { localStorage.clear(); location.reload(); } };
 }
 
 // ---------- 관리자 ----------
@@ -914,8 +691,7 @@ function vAdmin() {
   setTop({ title: '관리자 메뉴' });
   if (!isAdmin()) { view.innerHTML = '<div class="empty">설정에서 관리자 코드를 먼저 입력하세요.</div>'; return; }
   view.innerHTML = `<div class="pad">
-    <div class="section-title" style="margin-top:4px">승인 대기 신규회원</div><div id="pend"><div class="empty">불러오는 중…</div></div>
-    <div class="section-title">명부·분석 자료 올리기</div>
+    <div class="section-title" style="margin-top:4px">명부·분석 자료 올리기</div>
     <div class="card"><p class="small muted" style="margin-top:0">PC의 <b>data</b> 폴더에 있는 파일을 골라 서버(구글 시트·드라이브)에 올립니다. 회원 명부는 구글 시트에서 직접 고쳐도 됩니다.</p>
       <div class="field"><label>members.json (회원 명부 · 처음 한 번)</label><input type="file" id="a-m" accept=".json,application/json"></div>
       <div class="field"><label>profiles.json (기업역량 분석)</label><input type="file" id="a-p" accept=".json,application/json"></div>
@@ -923,7 +699,6 @@ function vAdmin() {
       <button class="btn primary block" id="a-up" ${isServer() ? '' : 'disabled'}>서버에 올리기</button>
       ${S.data.meta?.sheetUrl ? `<a class="btn block" style="margin-top:8px" href="${esc(S.data.meta.sheetUrl)}" target="_blank" rel="noopener">구글 시트 열기</a>` : ''}
     </div></div>`;
-  drawPending();
   $('#a-up').onclick = async () => {
     const read = async id => { const f = $(id).files[0]; return f ? JSON.parse(await f.text()) : null; };
     try {
@@ -934,24 +709,6 @@ function vAdmin() {
       toast('올렸습니다. 새로 불러옵니다'); setTimeout(() => location.reload(), 800);
     } catch (e) { toast('실패: ' + e.message); }
   };
-}
-async function drawPending() {
-  const box = $('#pend');
-  let list;
-  try { list = isServer() ? (await call('pending')).pending : localPending.list().map((r, i) => ({ ...r, regId: 'local-' + i })); } catch (e) { box.innerHTML = `<div class="check-note">${esc(e.message)}</div>`; return; }
-  if (!list.length) { box.innerHTML = '<div class="empty">대기 중인 신청이 없습니다.</div>'; return; }
-  box.innerHTML = list.map(r => `<div class="card" style="margin-bottom:10px">
-    <div class="row"><div class="grow"><b style="font-size:19px">${esc(r.name)}<span class="gisu">${esc(r.gisu)}회</span></b><div class="small muted">${esc([r.title, r.company].filter(Boolean).join(' · '))} · ${esc(r.mobile)}</div>
-    ${r.recommenderName ? `<div class="small">추천인: ${esc(r.recommenderName)}(${esc(r.recommenderGisu)}회)</div>` : ''}
-    ${r.updateOf ? `<div class="small" style="color:var(--warn)">기존 회원 정보 변경 신청</div>` : ''}
-    <div class="tiny faint">${esc(r.registrant ? '등록자 ' + r.registrant + ' · ' : '')}${esc((r.at || r.createdAt || '').slice(0, 16).replace('T', ' '))}</div></div>
-    ${r.cardUrl || r.card ? `<a href="${esc(r.cardUrl || r.card)}" target="_blank" rel="noopener"><img src="${esc(r.cardThumb || r.card)}" alt="명함" style="width:90px;border-radius:8px"></a>` : ''}</div>
-    ${isServer() ? `<div class="btn-row" style="margin-top:10px"><button class="btn primary sm" data-ok="${esc(r.regId)}">승인</button><button class="btn sm" data-no="${esc(r.regId)}">반려</button></div>` : '<p class="tiny faint">서버 연결 후 승인할 수 있습니다.</p>'}</div>`).join('');
-  $$('[data-ok],[data-no]', box).forEach(b => b.onclick = async () => {
-    const ok = !!b.dataset.ok;
-    if (!ok && !confirm('이 신청을 반려할까요?')) return;
-    try { await call(ok ? 'approve' : 'reject', { regId: b.dataset.ok || b.dataset.no }); toast(ok ? '승인했습니다' : '반려했습니다'); if (ok) { S.data = await loadAll(); S.data.members.sort(byGisu); S.byId = Object.fromEntries(S.data.members.map(m => [m.id, m])); } drawPending(); } catch (e) { toast('실패: ' + e.message); }
-  });
 }
 function vEdit(id) {
   const m = S.byId[id];

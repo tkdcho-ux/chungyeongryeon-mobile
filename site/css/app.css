@@ -311,6 +311,9 @@ table.fin thead th { color: var(--indigo); font-size: 15px; }
 .lightbox { position: fixed; inset: 0; z-index: 60; background: rgba(8,10,30,.92); display: grid; place-items: center; padding: 16px; color: #fff; }
 .lightbox img { max-height: 76vh; border-radius: 10px; }
 .lightbox .cap { margin-top: 10px; text-align: center; font-size: 17px; }
+/* 배경 흰 글씨를 물려받아 흰 버튼 글자가 사라지지 않게 */
+.lightbox .btn { color: var(--navy); }
+.lightbox .btn.primary, .lightbox .btn.danger { color: #fff; }
 
 /* ---------- 메시지 ---------- */
 .tpl { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: none; }
