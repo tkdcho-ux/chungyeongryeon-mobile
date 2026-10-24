@@ -75,7 +75,43 @@ export const localPending = {
   list: () => LS.get('cgr.localPending', []),
   add(rec) { const l = localPending.list(); l.unshift(rec); LS.set('cgr.localPending', l.slice(0, 50)); },
 };
+// 이 기기를 구별하는 표(사진을 올린 사람만 지울 수 있게 서버에 함께 보냅니다)
+export const deviceId = () => {
+  let d = LS.get('cgr.device', '');
+  if (!d) { d = (crypto.randomUUID?.() || String(Math.random()).slice(2) + Date.now()); LS.set('cgr.device', d); }
+  return d;
+};
+
+// 서버 없이 쓸 때 사진은 이 기기의 IndexedDB에 원래 화질로 보관합니다 (localStorage는 5MB뿐이라 작게 줄여야 했습니다)
+const idb = () => new Promise((ok, no) => {
+  const r = indexedDB.open('cgr', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('photos', { keyPath: 'id' });
+  r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+});
+const tx = async (mode, fn) => {
+  const db = await idb();
+  return new Promise((ok, no) => { const t = db.transaction('photos', mode), q = fn(t.objectStore('photos')); t.oncomplete = () => ok(q?.result); t.onerror = () => no(t.error); });
+};
 export const localPhotos = {
-  list: () => LS.get('cgr.localPhotos', []),
-  add(rec) { const l = localPhotos.list(); l.unshift(rec); LS.set('cgr.localPhotos', l.slice(0, 12)); },
+  async list() {
+    try {
+      // 예전 방식(localStorage)에 남은 작은 사진도 함께 보여 줍니다
+      const old = LS.get('cgr.localPhotos', []).map((p, i) => ({ id: 'old' + i, ...p }));
+      const l = await tx('readonly', s => s.getAll());
+      return [...l.sort((a, b) => (b.at || '').localeCompare(a.at || '')), ...old];
+    } catch { return LS.get('cgr.localPhotos', []).map((p, i) => ({ id: 'old' + i, ...p })); }
+  },
+  // IndexedDB를 못 쓰는 환경(카톡에서 받은 파일로 열기 등)에서는 줄인 사진(small())을 localStorage에 둡니다
+  async add(rec, small) {
+    try { await tx('readwrite', s => s.put({ id: 'L' + Date.now() + Math.random().toString(36).slice(2, 6), ...rec })); }
+    catch {
+      const l = LS.get('cgr.localPhotos', []); l.unshift(small ? await small() : rec);
+      while (l.length) { LS.set('cgr.localPhotos', l); if (JSON.stringify(LS.get('cgr.localPhotos', [])) === JSON.stringify(l)) break; l.pop(); }
+      if (!l.length) throw new Error('이 기기에 저장할 공간이 없습니다');
+    }
+  },
+  async remove(id) {
+    if (id.startsWith('old')) { const l = LS.get('cgr.localPhotos', []); l.splice(+id.slice(3), 1); LS.set('cgr.localPhotos', l); return; }
+    await tx('readwrite', s => s.delete(id));
+  },
 };

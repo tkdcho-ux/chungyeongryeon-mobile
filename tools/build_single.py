@@ -7,6 +7,7 @@ import base64, json, re, sys, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SITE, DATA = ROOT / "site", ROOT / "data"
+APP_URL = "https://tkdcho-ux.github.io/chungyeongryeon-mobile/"
 OUT = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "dist" / "천경련 디지털 회원명부_v3.html"
 
 
@@ -37,8 +38,11 @@ def main():
     html = html.replace('<link rel="stylesheet" href="css/app.css">', "<style>\n" + read("css/app.css") + "\n</style>")
     html = re.sub(r'\s*<link rel="manifest"[^>]*>', "", html)
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    # 파일로 열면 아이콘 만들기·카메라·글자인식이 막히므로 '웹 주소로 열기' 버튼에 초대 링크를 넣습니다
+    code_file = DATA / "access-code.txt"
+    invite = f"{APP_URL}#k={code_file.read_text(encoding='utf-8').strip()}" if code_file.exists() else APP_URL
     html = html.replace('<script type="module" src="js/app.js"></script>',
-                        f"<script>globalThis.__CGR_DATA__ = {payload};</script>\n<script type=\"module\">\n{js}\n</script>")
+                        f"<script>globalThis.__CGR_DATA__ = {payload}; globalThis.__CGR_INVITE__ = {json.dumps(invite)};</script>\n<script type=\"module\">\n{js}\n</script>")
     for asset in sorted({a for a in re.findall(r"assets/[\w.-]+\.(?:svg|png)", html)}):
         html = html.replace(asset, data_uri(asset))
     OUT.parent.mkdir(parents=True, exist_ok=True)

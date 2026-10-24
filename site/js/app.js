@@ -1,6 +1,6 @@
 // 천경련 디지털 회원명부 — 화면과 동작
-import { LS, loadAll, call, isServer, apiUrl, kakaoKey, appUrl, localPending, localPhotos } from './store.js';
-import { toJpeg, recognize, parseCard } from './ocr.js';
+import { LS, loadAll, call, isServer, apiUrl, kakaoKey, appUrl, localPending, localPhotos, deviceId, normCode } from './store.js';
+import { toJpeg, loadCanvas, autoCrop, warpCard, rotate90, canvasToJpeg, recognize, parseCard } from './ocr.js';
 import { smsHref, telHref, sendKakao, copyText, downloadVcard, isMobileNo, isIOS, TEMPLATES } from './msg.js';
 
 // ---------- 공통 ----------
@@ -62,6 +62,11 @@ async function boot() {
   // 초대 링크(…/#k=접근코드)로 들어오면 코드를 저장하고 주소창에서 지웁니다
   const inv = location.hash.match(/^#k=([\w-]+)/);
   if (inv) { LS.set('cgr.code', inv[1]); history.replaceState(null, '', location.pathname + '#/home'); }
+  // 카카오톡 안의 브라우저는 아이콘 만들기·카메라가 막혀 있어, 처음 한 번은 휴대폰 기본 브라우저로 넘깁니다
+  if (inKakao() && !fileMode && !sessionStorage.getItem('cgr.ext')) {
+    try { sessionStorage.setItem('cgr.ext', '1'); } catch { /* 무시 */ }
+    location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(inviteUrl());
+  }
   try {
     S.data = await loadAll();
   } catch (e) {
@@ -120,7 +125,7 @@ document.addEventListener('click', e => {
   else if (act === 'pick') { togglePick(id, el); }
   else if (act === 'compose') { S.compose.ids = (el.dataset.ids || '').split(',').filter(Boolean); S.compose.body = ''; location.hash = '#/compose'; }
   else if (act === 'print') { window.print(); }
-  else if (act === 'lightbox') { lightbox(el.dataset.src, el.dataset.cap); }
+  else if (act === 'lightbox') { const p = (S.photoList || []).find(x => String(x.id) === el.dataset.id); p && lightbox(p); }
 });
 
 async function shareKakao(text) {
@@ -468,24 +473,45 @@ function vCustom() {
 }
 
 // ---------- 신규회원 등록 ----------
-const EMPTY_REG = () => ({ card: null, photo: null, ocrText: '', engine: '', f: { name: '', gisu: '', title: '', company: '', industry: '', group: '', mobile: '', tel: '', fax: '', email: '', address: '', website: '', memo: '', recommended: false, recommenderName: '', recommenderGisu: '', registrant: LS.get('cgr.me', {}).name || '' } });
+// 파일(content://, file://)로 열면 카메라·글자인식·아이콘 만들기가 막힙니다 → 웹 주소로 열도록 안내
+const fileMode = !/^https?:$/.test(location.protocol);
+const webUrl = () => globalThis.__CGR_INVITE__ || inviteUrl();
+// 받은 사람이 코드 입력 없이 바로 들어오도록 접근코드를 붙인 초대 링크
+function inviteUrl() {
+  const base = fileMode ? appUrl() : location.origin + location.pathname, code = normCode(LS.get('cgr.code', ''));
+  return code ? `${base}#k=${code}` : base;
+}
+const inKakao = () => /KAKAOTALK/i.test(navigator.userAgent);
+const fileModeNote = what => fileMode ? `<div class="card warn-card"><b>지금은 '파일'로 열려 있어 ${what}이(가) 되지 않습니다</b>
+  <p class="small" style="margin:4px 0 10px">카톡으로 받은 파일 대신 <b>웹 주소</b>로 열어야 모든 기능이 됩니다.</p>
+  <a class="btn primary block" href="${esc(webUrl())}" target="_blank" rel="noopener">웹 주소로 열기</a></div>` : '';
+const EMPTY_REG = () => ({ card: null, cardCanvas: null, src: null, quad: null, photo: null, ocrText: '', engine: '', auto: {}, f: { name: '', gisu: '', title: '', company: '', industry: '', group: '', mobile: '', tel: '', fax: '', email: '', address: '', website: '', memo: '', recommended: false, recommenderName: '', recommenderGisu: '', registrant: LS.get('cgr.me', {}).name || '' } });
+const canLiveCam = () => !fileMode && window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
 function vRegister() {
   setTop({ title: '회원 등록', back: false }); setTab('register');
   S.reg ||= EMPTY_REG();
   const R = S.reg, f = R.f;
   const groups = S.data.groups;
-  const fld = (k, label, attrs = '', req = false) => `<div class="field"><label for="f-${k}">${label}${req ? ' <span class="req">*</span>' : ''}</label><input id="f-${k}" name="${k}" value="${esc(f[k])}" ${attrs}></div>`;
+  const autoTag = k => R.auto[k] ? ' <span class="auto-tag">명함에서 읽음</span>' : '';
+  const fld = (k, label, attrs = '', req = false) => `<div class="field"><label for="f-${k}">${label}${req ? ' <span class="req">*</span>' : ''}${autoTag(k)}</label><input id="f-${k}" name="${k}" class="${R.auto[k] ? 'auto' : ''}" value="${esc(f[k])}" ${attrs}></div>`;
   view.innerHTML = `<div class="pad">
+    ${fileModeNote('명함 자동 인식')}
     <div class="section-title" style="margin-top:4px">① 명함 사진 찍기</div>
-    <div class="scan-box">
-      <label class="scan-btn primary">${I.camera}명함 촬영<small>카메라가 열립니다</small><input type="file" accept="image/*" capture="environment" id="in-card-cam"></label>
+    ${R.card ? `<figure class="card-shot"><img src="${R.card.dataUrl}" alt="명함"></figure>
+    <div class="shot-tools"><button class="btn" type="button" id="reCrop">모서리 맞추기</button><button class="btn" type="button" id="reRotate">↻ 돌리기</button><button class="btn" type="button" id="reRead">다시 읽기</button></div>
+    <div class="scan-box" style="margin-top:10px">
+      ${canLiveCam() ? `<button class="scan-btn" type="button" id="btn-cam">${I.camera}다시 찍기</button>` : `<label class="scan-btn">${I.camera}다시 찍기<input type="file" accept="image/*" capture="environment" id="in-card-cam"></label>`}
+      <label class="scan-btn">${I.image}다른 사진 고르기<input type="file" accept="image/*" id="in-card"></label>
+    </div>` : `<div class="scan-box">
+      ${canLiveCam() ? `<button class="scan-btn primary" type="button" id="btn-cam">${I.camera}명함 촬영<small>틀에 맞춰 찍으면 끝</small></button>`
+        : `<label class="scan-btn primary">${I.camera}명함 촬영<small>카메라가 열립니다</small><input type="file" accept="image/*" capture="environment" id="in-card-cam"></label>`}
       <label class="scan-btn">${I.image}사진첩에서 고르기<small>찍어 둔 명함 사진</small><input type="file" accept="image/*" id="in-card"></label>
     </div>
-    <p class="small" style="margin:10px 2px 0;color:var(--navy);font-weight:700">찍으면 이름·전화·회사가 아래에 자동으로 채워집니다.</p>
-    <label class="scan-btn" style="margin-top:10px;grid-auto-flow:column;justify-content:center;padding:12px">${I.save}<span>얼굴 사진 넣기 <small>(안 해도 됩니다)</small></span><input type="file" accept="image/*" id="in-photo"></label>
+    <p class="small" style="margin:10px 2px 0;color:var(--navy);font-weight:700">명함을 어두운 바탕(책상 등)에 놓고 찍으면 테두리를 찾아 반듯하게 펴고, 이름·전화·회사를 아래에 자동으로 채웁니다.</p>`}
     <div id="ocrState"></div>
-    <div class="preview-row">${R.card ? `<figure><img src="${R.card.dataUrl}" alt="명함"><figcaption>명함</figcaption></figure>` : ''}${R.photo ? `<figure><img src="${R.photo.dataUrl}" alt="사진"><figcaption>프로필 사진</figcaption></figure>` : ''}</div>
     ${R.ocrText ? `<details style="margin-top:10px"><summary class="small muted">인식된 글자 보기 (${esc(R.engine)})</summary><div class="ocr-raw">${esc(R.ocrText)}</div></details>` : ''}
+    <label class="scan-btn" style="margin-top:12px;grid-auto-flow:column;justify-content:center;padding:12px">${I.save}<span>얼굴 사진 넣기 <small>(안 해도 됩니다)</small></span><input type="file" accept="image/*" id="in-photo"></label>
+    ${R.photo ? `<div class="preview-row"><figure><img src="${R.photo.dataUrl}" alt="사진"><figcaption>프로필 사진</figcaption></figure></div>` : ''}
 
     <form id="regForm" autocomplete="off">
       <div class="section-title">② 회원 정보</div>
@@ -529,18 +555,27 @@ function vRegister() {
 
   const form = $('#regForm');
   const sync = () => { for (const el of form.elements) if (el.name) f[el.name] = el.type === 'checkbox' ? el.checked : el.value; };
-  form.addEventListener('input', sync);
+  form.addEventListener('input', e => { sync(); if (R.auto[e.target.name]) { delete R.auto[e.target.name]; e.target.classList.remove('auto'); } });
   $('#f-rec').onchange = e => { $('#recBox').style.display = e.target.checked ? '' : 'none'; };
   $('#f-recName').addEventListener('change', e => { const hit = S.data.members.filter(m => m.name === e.target.value.trim()); if (hit.length === 1 && !$('#f-recGisu').value) { $('#f-recGisu').value = hit[0].gisu; sync(); } });
   $('#regReset').onclick = () => { if (confirm('입력한 내용을 모두 지울까요?')) { S.reg = EMPTY_REG(); vRegister(); } };
-  const onCard = async e => {
+  // 명함 확정 → 화면 갱신 → 글자 읽기
+  const useCard = async (src, quad, card) => {
+    Object.assign(R, { src, quad, cardCanvas: card, card: canvasToJpeg(card, 1600, 0.88) });
+    vRegister(); await runOcr();
+  };
+  const fromFile = async e => {
     const file = e.target.files[0]; if (!file) return;
     sync();
-    R.card = await toJpeg(file, 1800, 0.88);
-    vRegister();
-    await runOcr();
+    const src = await loadCanvas(file, 2400);
+    openCropper(src, autoCrop(src).quad, (q, card) => useCard(src, q, card));
   };
-  $('#in-card-cam').onchange = onCard; $('#in-card').onchange = onCard;
+  $('#in-card-cam') && ($('#in-card-cam').onchange = fromFile);
+  $('#in-card').onchange = fromFile;
+  $('#btn-cam') && ($('#btn-cam').onclick = () => { sync(); openCamera(useCard, fromFile); });
+  $('#reCrop') && ($('#reCrop').onclick = () => openCropper(R.src, R.quad, (q, card) => useCard(R.src, q, card)));
+  $('#reRotate') && ($('#reRotate').onclick = () => { const c = rotate90(R.cardCanvas); useCard(c, null, c); });
+  $('#reRead') && ($('#reRead').onclick = () => runOcr());
   $('#in-photo').onchange = async e => { const file = e.target.files[0]; if (!file) return; sync(); R.photo = await toJpeg(file, 640, 0.85); vRegister(); };
 
   form.onsubmit = async e => {
@@ -566,16 +601,105 @@ async function runOcr() {
   const R = S.reg, box = $('#ocrState');
   box.innerHTML = `<div class="card" style="margin-top:12px"><b id="ocrMsg">명함 글자를 읽는 중…</b><div class="progress"><i id="ocrBar"></i></div></div>`;
   try {
-    const { text, engine } = await recognize(R.card, (p, msg) => { const b = $('#ocrBar'); if (b) b.style.width = Math.round(p * 100) + '%'; const t = $('#ocrMsg'); if (t) t.textContent = msg; });
-    R.ocrText = text; R.engine = engine;
-    const parsed = parseCard(text);
-    let n = 0;
-    for (const [k, v] of Object.entries(parsed)) if (v && !R.f[k]) { R.f[k] = v; n++; }
+    const r = await recognize(R.cardCanvas, (p, msg) => { const b = $('#ocrBar'); if (b) b.style.width = Math.round(p * 100) + '%'; const t = $('#ocrMsg'); if (t) t.textContent = msg; });
+    // 다시 읽을 때는 앞서 자동으로 채운 값(사람이 고치지 않은 것)을 비우고 새로 채웁니다
+    for (const [k, v] of Object.entries(R.auto)) if (R.f[k] === v) R.f[k] = '';
+    R.auto = {}; R.ocrText = r.text; R.engine = r.engine;
+    const parsed = r.fields || parseCard(r.text, r.lines);
+    for (const [k, v] of Object.entries(parsed)) if (k in R.f && typeof v === 'string' && v.trim() && !R.f[k]) { R.f[k] = v.trim(); R.auto[k] = R.f[k]; }
+    const n = Object.keys(R.auto).length;
     vRegister();
-    toast(n ? `명함에서 ${n}개 항목을 읽었습니다. 내용을 확인하세요` : '글자를 읽지 못했습니다. 직접 입력해 주세요');
+    toast(n ? `명함에서 ${n}개 항목을 읽었습니다. 하늘색 칸을 확인하세요` : '글자를 읽지 못했습니다. [모서리 맞추기]나 [돌리기] 후 다시 읽거나 직접 입력해 주세요');
   } catch (e) {
     box.innerHTML = `<div class="check-note">자동 인식에 실패했습니다(${esc(e.message)}). 아래에 직접 입력해 주세요.</div>`;
   }
+}
+
+// 리멤버식 촬영 화면: 실시간 카메라 + 명함 틀. 틀 안을 잘라 테두리를 한 번 더 찾아 반듯하게 폅니다
+function openCamera(onCard, onFile) {
+  const ov = document.createElement('div'); ov.className = 'cam';
+  ov.innerHTML = `<video playsinline muted autoplay></video>
+    <div class="cam-frame"><i></i><i></i><i></i><i></i></div>
+    <p class="cam-hint">명함을 틀 안에 꽉 차게 맞춰 주세요</p>
+    <div class="cam-bar"><button type="button" class="cam-x" aria-label="닫기">✕</button>
+      <button type="button" class="cam-shot" aria-label="촬영"></button>
+      <label class="cam-pick">${I.image}<span>사진첩</span><input type="file" accept="image/*"></label></div>`;
+  document.body.appendChild(ov);
+  const video = $('video', ov); let stream;
+  const close = () => { stream?.getTracks().forEach(t => t.stop()); ov.remove(); };
+  $('.cam-x', ov).onclick = close;
+  $('input', ov).onchange = e => { close(); onFile(e); };
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
+    .then(s => { stream = s; video.srcObject = s; })
+    .catch(() => { $('.cam-hint', ov).textContent = '카메라를 열 수 없습니다. 아래 [사진첩]을 쓰거나 브라우저에서 카메라 권한을 허용해 주세요'; });
+  $('.cam-shot', ov).onclick = () => {
+    if (!video.videoWidth) return;
+    // 화면의 틀 위치 → 실제 영상 좌표 (영상은 화면을 꽉 채우도록 잘려 보입니다)
+    const vr = video.getBoundingClientRect(), fr = $('.cam-frame', ov).getBoundingClientRect();
+    const k = Math.max(vr.width / video.videoWidth, vr.height / video.videoHeight);
+    const ox = (vr.width - video.videoWidth * k) / 2, oy = (vr.height - video.videoHeight * k) / 2, pad = 0.08;
+    let x = (fr.left - vr.left - ox) / k, y = (fr.top - vr.top - oy) / k, w = fr.width / k, h = fr.height / k;
+    x -= w * pad; y -= h * pad; w *= 1 + 2 * pad; h *= 1 + 2 * pad;
+    x = Math.max(0, x); y = Math.max(0, y); w = Math.min(video.videoWidth - x, w); h = Math.min(video.videoHeight - y, h);
+    const shot = document.createElement('canvas'); shot.width = Math.round(w); shot.height = Math.round(h);
+    shot.getContext('2d').drawImage(video, x, y, w, h, 0, 0, shot.width, shot.height);
+    close();
+    const { quad, card } = autoCrop(shot);
+    if (quad) return onCard(shot, quad, card);
+    // 테두리를 못 찾으면 틀 안쪽(여백 제외)을 그대로 씁니다
+    const mx = shot.width * pad / (1 + 2 * pad), my = shot.height * pad / (1 + 2 * pad);
+    const q = [{ x: mx, y: my }, { x: shot.width - mx, y: my }, { x: shot.width - mx, y: shot.height - my }, { x: mx, y: shot.height - my }];
+    onCard(shot, q, warpCard(shot, q));
+  };
+}
+
+// 모서리 맞추기 화면: 자동으로 찾은 네 모서리를 손가락으로 끌어 고칩니다
+function openCropper(src, quad, onDone) {
+  let canvas = src;
+  const inset = c => [{ x: c.width * .06, y: c.height * .06 }, { x: c.width * .94, y: c.height * .06 }, { x: c.width * .94, y: c.height * .94 }, { x: c.width * .06, y: c.height * .94 }];
+  let q = (quad || inset(canvas)).map(p => ({ ...p }));
+  const ov = document.createElement('div'); ov.className = 'cropper';
+  ov.innerHTML = `<p class="crop-hint">${quad ? '명함 테두리를 찾았습니다. 맞지 않으면 동그라미를 끌어 모서리에 맞춰 주세요' : '동그라미 4개를 끌어 명함 네 모서리에 맞춰 주세요'}</p>
+    <div class="crop-stage"><img alt=""><svg><polygon/></svg><b></b><b></b><b></b><b></b></div>
+    <div class="crop-bar"><button type="button" class="btn" data-a="cancel">취소</button><button type="button" class="btn" data-a="rot">↻ 돌리기</button><button type="button" class="btn primary" data-a="ok">이대로 읽기</button></div>`;
+  document.body.appendChild(ov);
+  const stage = $('.crop-stage', ov), img = $('img', ov), poly = $('polygon', ov), dots = $$('b', ov);
+  let scale = 1;
+  const draw = () => {
+    poly.setAttribute('points', q.map(p => `${p.x * scale},${p.y * scale}`).join(' '));
+    dots.forEach((d, i) => { d.style.left = q[i].x * scale + 'px'; d.style.top = q[i].y * scale + 'px'; });
+  };
+  const layout = () => {
+    const box = ov.getBoundingClientRect();
+    scale = Math.min((box.width - 32) / canvas.width, (box.height - 190) / canvas.height);
+    stage.style.width = canvas.width * scale + 'px'; stage.style.height = canvas.height * scale + 'px';
+    draw();
+  };
+  const load = () => { img.src = canvas.toDataURL('image/jpeg', 0.85); layout(); };
+  dots.forEach((d, i) => {
+    d.onpointerdown = e => {
+      e.preventDefault(); d.setPointerCapture(e.pointerId);
+      d.onpointermove = ev => {
+        const r = stage.getBoundingClientRect();
+        q[i] = { x: Math.max(0, Math.min(canvas.width, (ev.clientX - r.left) / scale)), y: Math.max(0, Math.min(canvas.height, (ev.clientY - r.top) / scale)) };
+        draw();
+      };
+      d.onpointerup = () => { d.onpointermove = null; };
+    };
+  });
+  ov.onclick = e => {
+    const a = e.target.closest('[data-a]')?.dataset.a; if (!a) return;
+    if (a === 'cancel') return ov.remove();
+    if (a === 'rot') {
+      // 사진을 시계 방향으로 돌리고 모서리도 함께 돌립니다 (x,y) → (H−y, x)
+      const H = canvas.height; canvas = rotate90(canvas);
+      q = [q[3], q[0], q[1], q[2]].map(p => ({ x: H - p.y, y: p.x }));
+      return load();
+    }
+    removeEventListener('resize', layout); ov.remove(); onDone(q, warpCard(canvas, q));
+  };
+  addEventListener('resize', layout);
+  load();
 }
 async function shrink(dataUrl) { const b = await (await fetch(dataUrl)).blob(); return (await toJpeg(b, 480, 0.7)).dataUrl; }
 function regDone(m) {
@@ -600,6 +724,8 @@ function vPhotos() {
   const me = LS.get('cgr.me', {});
   view.innerHTML = `<div class="pad">
     ${modeBanner()}
+    ${isServer() ? '' : `<div class="card warn-card"><b>지금 올리는 사진은 이 휴대폰에만 저장됩니다</b>
+      <p class="small" style="margin:4px 0 0">다른 회원도 보게 하려면 총무가 무료 구글 서버를 연결해야 합니다 (설정 → 서버 주소).</p></div>`}
     <div class="scan-box one">
       <label class="scan-btn primary big">${I.image}앨범에서 사진 고르기<small>여러 장을 한 번에 고를 수 있습니다</small><input type="file" accept="image/*" multiple id="p-files"></label>
       <label class="scan-btn">${I.camera}지금 찍어서 올리기<input type="file" accept="image/*" capture="environment" id="p-cam"></label>
@@ -628,9 +754,13 @@ function vPhotos() {
     for (const [i, file] of files.entries()) {
       st.innerHTML = `<div style="margin-top:12px"><b>${i + 1}/${files.length}장 올리는 중…</b><div class="progress"><i style="width:${(i / files.length) * 100}%"></i></div></div>`;
       try {
-        const img = await toJpeg(file, 1600, 0.82);
-        if (isServer()) await call('uploadPhoto', { image: img.base64, event: ev, caption: cap, uploader: who, uploaderGisu: gisu });
-        else localPhotos.add({ url: (await toJpeg(file, 420, 0.7)).dataUrl, event: ev, caption: cap, uploader: who, uploaderGisu: gisu, at: new Date().toISOString(), local: true });
+        // 휴대폰 화면에서 선명하도록 긴 변 2048px·고화질로 올립니다 (원본 10MB 사진도 약 0.6MB)
+        const img = await toJpeg(file, 2048, 0.9);
+        if (isServer()) await call('uploadPhoto', { image: img.base64, event: ev, caption: cap, uploader: who, uploaderGisu: gisu, device: deviceId() });
+        else {
+          const rec = { url: img.dataUrl, event: ev, caption: cap, uploader: who, uploaderGisu: gisu, at: new Date().toISOString(), local: true };
+          await localPhotos.add(rec, async () => ({ ...rec, url: (await toJpeg(file, 1280, 0.8)).dataUrl }));
+        }
         ok++;
       } catch (err) { toast(`${i + 1}번째 사진 실패: ${err.message}`); }
     }
@@ -644,19 +774,33 @@ async function drawGallery() {
   const gal = $('#gal'); if (!gal) return;
   let list = [];
   if (isServer()) {
-    try { S.photos ||= (await call('photos')).photos; list = S.photos; } catch (e) { gal.innerHTML = `<div class="empty" style="grid-column:1/-1">사진을 불러오지 못했습니다: ${esc(e.message)}</div>`; return; }
-  } else list = localPhotos.list();
+    try { S.photos ||= (await call('photos', { device: deviceId() })).photos; list = S.photos; } catch (e) { gal.innerHTML = `<div class="empty" style="grid-column:1/-1">사진을 불러오지 못했습니다: ${esc(e.message)}</div>`; return; }
+  } else list = await localPhotos.list();
+  S.photoList = list;
   $('#pcount') && ($('#pcount').textContent = `${list.length}장`);
   gal.innerHTML = list.length ? list.map(p => {
     const cap = `${p.event || ''}${p.caption ? ' · ' + p.caption : ''} — ${p.uploader || ''}${p.uploaderGisu ? `(${p.uploaderGisu}회)` : ''}`;
-    return `<a href="javascript:void 0" data-act="lightbox" data-src="${esc(p.full || p.url)}" data-cap="${esc(cap)}"><img loading="lazy" src="${esc(p.url)}" alt="${esc(cap)}">${p.local ? '<span class="badge local local-mark">이 기기</span>' : ''}</a>`;
+    return `<a href="javascript:void 0" data-act="lightbox" data-id="${esc(p.id)}"><img loading="lazy" src="${esc(p.url)}" alt="${esc(cap)}">${p.local ? '<span class="badge local local-mark">이 기기</span>' : ''}</a>`;
   }).join('') : '<div class="empty" style="grid-column:1/-1">아직 올라온 사진이 없습니다.<br>첫 사진을 올려 주세요!</div>';
 }
-function lightbox(src, cap) {
+function lightbox(p) {
+  const cap = `${p.event || ''}${p.caption ? ' · ' + p.caption : ''} — ${p.uploader || ''}${p.uploaderGisu ? `(${p.uploaderGisu}회)` : ''}`;
+  // 지울 수 있는 사람: 이 기기에 저장한 사진, 서버 사진은 올린 기기 또는 관리자
+  const canDel = p.local || p.mine || isAdmin();
   const d = document.createElement('div');
   d.className = 'lightbox';
-  d.innerHTML = `<div><img src="${esc(src)}" alt=""><div class="cap">${esc(cap)}</div><div class="center" style="margin-top:12px"><button class="btn">닫기</button></div></div>`;
-  d.onclick = () => d.remove();
+  d.innerHTML = `<div><img src="${esc(p.full || p.url)}" alt=""><div class="cap">${esc(cap)}</div>
+    <div class="btn-row" style="margin-top:12px;justify-content:center">${canDel ? '<button class="btn danger" data-del>사진 삭제</button>' : ''}<a class="btn" href="${esc(p.full || p.url)}" download="천경련_사진.jpg" target="_blank" rel="noopener">저장</a><button class="btn" data-close>닫기</button></div></div>`;
+  d.onclick = async e => {
+    if (e.target.closest('a')) return;
+    if (!e.target.closest('[data-del]')) return d.remove();
+    if (!confirm('이 사진을 지울까요? 지우면 되돌릴 수 없습니다.')) return;
+    try {
+      if (p.local) await localPhotos.remove(p.id);
+      else await call('deletePhoto', { photoId: p.id, device: deviceId() });
+      d.remove(); S.photos = null; toast('사진을 지웠습니다'); drawGallery();
+    } catch (err) { toast('삭제 실패: ' + err.message); }
+  };
   document.body.appendChild(d);
 }
 
@@ -702,13 +846,17 @@ window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.inst
 function vInstall() {
   setTop({ title: '바탕화면에 아이콘 만들기' }); setTab('home');
   const ua = navigator.userAgent;
-  const inKakao = /KAKAOTALK/i.test(ua), samsung = /SamsungBrowser/i.test(ua), android = /Android/i.test(ua);
-  const url = location.href.split('#')[0];
+  const samsung = /SamsungBrowser/i.test(ua), android = /Android/i.test(ua);
+  const url = inviteUrl();
   let how;
-  if (standalone()) how = `<div class="notice"><span class="ico">✓</span><div><b>이미 바탕화면 앱으로 실행 중입니다.</b></div></div>`;
-  else if (inKakao) how = `<div class="card"><b style="font-size:19px;color:var(--danger)">카카오톡 안에서는 아이콘을 만들 수 없습니다</b>
+  if (fileMode) how = `<div class="card warn-card"><b style="font-size:19px">카톡으로 받은 '파일'로 열려 있어 아이콘을 만들 수 없습니다</b>
+      <p class="small" style="margin:6px 0 4px">주소창이 <b>content://</b> 또는 <b>file://</b>로 시작하면 파일입니다. 브라우저는 <b>https://</b> 웹 주소에서만 [현재 페이지 추가]·[홈 화면에 추가]를 켜 줍니다.</p>
+      <ol class="steps"><li>아래 <b>웹 주소로 열기</b>를 누르세요</li><li>열린 화면에서 <b>바탕화면에 아이콘 만들기</b>를 다시 누르세요</li></ol>
+      <a class="btn primary block" style="margin-top:8px" href="${esc(webUrl())}" target="_blank" rel="noopener">웹 주소로 열기</a></div>`;
+  else if (standalone()) how = `<div class="notice"><span class="ico">✓</span><div><b>이미 바탕화면 앱으로 실행 중입니다.</b></div></div>`;
+  else if (inKakao()) how = `<div class="card"><b style="font-size:19px;color:var(--danger)">카카오톡 안에서는 아이콘을 만들 수 없습니다</b>
       <ol class="steps"><li>${android ? '오른쪽 위(또는 아래) <b>⋮ 점 세 개</b>' : '오른쪽 아래 <b>공유(⇪) 또는 ⋯</b>'} 를 누르세요</li><li><b>${android ? '다른 브라우저로 열기' : 'Safari로 열기'}</b>를 누르세요</li><li>열린 화면에서 이 안내를 다시 따라 하세요</li></ol>
-      ${android ? `<a class="btn primary block" style="margin-top:12px" href="intent://${location.host}${location.pathname}#Intent;scheme=https;package=com.android.chrome;end">크롬으로 바로 열기</a>` : ''}</div>`;
+      ${android ? `<a class="btn primary block" style="margin-top:12px" href="kakaotalk://web/openExternal?url=${encodeURIComponent(url)}">기본 브라우저로 바로 열기</a>` : `<a class="btn primary block" style="margin-top:12px" href="kakaotalk://web/openExternal?url=${encodeURIComponent(url)}">Safari로 바로 열기</a>`}</div>`;
   else if (S.installEvt) how = `<button class="btn primary block" id="doInstall" style="min-height:66px;font-size:21px">바탕화면에 천경련 아이콘 추가</button><p class="small muted center">버튼을 누르고 [설치] 또는 [추가]를 누르면 끝납니다.</p>`;
   else if (isIOS) how = `<div class="card"><b style="font-size:19px">아이폰 (Safari)</b><ol class="steps"><li>화면 아래 가운데 <b>공유 버튼(□↑)</b>을 누르세요</li><li>목록을 올려 <b>홈 화면에 추가</b>를 누르세요</li><li>오른쪽 위 <b>추가</b>를 누르면 바탕화면에 <b>천경련</b> 아이콘이 생깁니다</li></ol></div>`;
   else if (samsung) how = `<div class="card"><b style="font-size:19px">삼성 인터넷</b><ol class="steps"><li>아래쪽 <b>메뉴(≡)</b>를 누르세요</li><li><b>현재 페이지 추가</b> → <b>홈 화면</b>을 누르세요</li><li><b>추가</b>를 누르면 끝납니다</li></ol></div>`;
@@ -718,7 +866,8 @@ function vInstall() {
     ${how}
     <div class="section-title">다른 회원에게 앱 주소 보내기</div>
     <div class="btn-row"><button class="btn kakao" id="shareApp">${I.kakao}카톡으로 보내기</button><button class="btn" id="copyApp">${I.copy}주소 복사</button></div>
-    <p class="small muted" style="word-break:break-all">${esc(url)}</p>
+    <p class="small muted" style="word-break:break-all">${esc(url.replace(/#k=.*/, '#k=••••'))}</p>
+    <p class="tiny faint">이 링크에는 접근코드가 들어 있어 누르기만 하면 바로 들어옵니다. 회원 단톡방에만 보내 주세요.</p>
   </div>`;
   $('#doInstall') && ($('#doInstall').onclick = async () => { S.installEvt.prompt(); const r = await S.installEvt.userChoice; S.installEvt = null; toast(r.outcome === 'accepted' ? '바탕화면에 추가했습니다' : '취소했습니다'); vInstall(); });
   $('#shareApp').onclick = () => shareKakao('[천경련 회원명부] 천안고 경제인 연합회 디지털 회원명부입니다. 링크를 열고 [바탕화면에 아이콘 만들기]를 눌러 주세요.', url);
