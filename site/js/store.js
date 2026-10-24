@@ -44,6 +44,8 @@ export async function loadAll() {
       throw e;
     }
   }
+  // 한 파일짜리 HTML(tools/build_single.py)은 명부를 파일 안에 담고 있습니다
+  if (globalThis.__CGR_DATA__) return { mode: 'local', ...globalThis.__CGR_DATA__ };
   // 초대 링크 방식: 접근코드로 암호화한 명부 파일(data.enc.json)을 브라우저에서 풉니다
   const bundle = await getJson('./data.enc.json');
   if (bundle) {

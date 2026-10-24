@@ -6,3 +6,4 @@ data/
 Thumbs.db
 # 성장모델 보고서 문서판(회원 기업 분석)도 공개하지 않습니다
 docs/*.md
+dist/
